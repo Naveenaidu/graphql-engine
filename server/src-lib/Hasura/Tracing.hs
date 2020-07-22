@@ -14,9 +14,7 @@ module Hasura.Tracing
   , noReporter
   , HasReporter(..)
   , TracingMetadata
-  , SuspendedRequest(..)
   , extractHttpContext
-  , traceHttpRequest
   , tracedHttpRequest
   ) where
 
@@ -194,9 +192,6 @@ instance MonadTrace m => MonadTrace (ExceptT e m) where
   currentReporter = lift currentReporter
   attachMetadata = lift . attachMetadata
 
--- | A HTTP request, which can be modified before execution.
-data SuspendedRequest m a = SuspendedRequest HTTP.Request (HTTP.Request -> m a)
-
 -- | Extract the trace and parent span headers from a HTTP request
 -- and create a new 'TraceContext'. The new context will contain
 -- a fresh span ID, and the provided span ID will be assigned as
@@ -209,35 +204,16 @@ extractHttpContext hdrs = do
     <*> pure freshSpanId
     <*> pure (HTTP.parseHeaderMaybe =<< lookup "X-Hasura-SpanId" hdrs)
 
-traceHttpRequest
-  :: MonadTrace m
+
+tracedHttpRequest 
+  :: MonadTrace m 
   => Text
   -- ^ human-readable name for this block of code
-  -> m (SuspendedRequest m a)
-  -- ^ an action which yields the request about to be executed and suspends
-  -- before actually executing it
+  -> HTTP.Request
+  -- ^ http request that needs to be made
+  -> (HTTP.Request -> m a)
+  -- ^ a function that takes the traced request and executes it
   -> m a
-traceHttpRequest name f = trace name do
-  SuspendedRequest req next <- f
-  let reqBytes = case HTTP.requestBody req of
-        HTTP.RequestBodyBS bs -> Just (fromIntegral (BS.length bs))
-        HTTP.RequestBodyLBS bs -> Just (BL.length bs)
-        HTTP.RequestBodyBuilder len _ -> Just len
-        HTTP.RequestBodyStream len _ -> Just len
-        _ -> Nothing
-  for_ reqBytes \b ->
-    attachMetadata [("request_body_bytes", fromString (show b))]
-  TraceContext{..} <- currentContext
-  let tracingHeaders =
-        [ ("X-Hasura-TraceId", fromString (show tcCurrentTrace))
-        , ("X-Hasura-SpanId", fromString (show tcCurrentSpan))
-        ]
-      req' = req { HTTP.requestHeaders =
-                     tracingHeaders <> HTTP.requestHeaders req
-                 }
-  next req'
-
-tracedHttpRequest :: MonadTrace m => Text -> HTTP.Request ->  (HTTP.Request -> m a) -> m a
 tracedHttpRequest name req f = trace name do
   let reqBytes = case HTTP.requestBody req of
         HTTP.RequestBodyBS bs -> Just (fromIntegral (BS.length bs))
