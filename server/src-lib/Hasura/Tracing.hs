@@ -17,6 +17,7 @@ module Hasura.Tracing
   , SuspendedRequest(..)
   , extractHttpContext
   , traceHttpRequest
+  , tracedHttpRequest
   ) where
 
 import           Hasura.Prelude
@@ -235,3 +236,23 @@ traceHttpRequest name f = trace name do
                      tracingHeaders <> HTTP.requestHeaders req
                  }
   next req'
+
+tracedHttpRequest :: MonadTrace m => Text -> HTTP.Request ->  (HTTP.Request -> m a) -> m a
+tracedHttpRequest name req f = trace name do
+  let reqBytes = case HTTP.requestBody req of
+        HTTP.RequestBodyBS bs -> Just (fromIntegral (BS.length bs))
+        HTTP.RequestBodyLBS bs -> Just (BL.length bs)
+        HTTP.RequestBodyBuilder len _ -> Just len
+        HTTP.RequestBodyStream len _ -> Just len
+        _ -> Nothing
+  for_ reqBytes \b ->
+    attachMetadata [("request_body_bytes", fromString (show b))]
+  TraceContext{..} <- currentContext
+  let tracingHeaders =
+        [ ("X-Hasura-TraceId", fromString (show tcCurrentTrace))
+        , ("X-Hasura-SpanId", fromString (show tcCurrentSpan))
+        ]
+      req' = req { HTTP.requestHeaders =
+                     tracingHeaders <> HTTP.requestHeaders req
+                 }
+  f req'
